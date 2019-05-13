@@ -1,6 +1,6 @@
 ### Pre-requirements
 #### stable_baselines
-Please add stable_baselines into ./
+Please add stable_baselines into "./"
 
 #### Environment
 Requirments are the same as skill_lib, which can be found at "./skill_lib/requirements.txt"
