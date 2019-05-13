@@ -6,7 +6,7 @@ import os
 import random
 import sys
 import tensorflow as tf
-from skill_env import RMSenv
+from skill_env import RMSenv, AtariSkillenv
 
 from lib import plotting
 from collections import deque, namedtuple
@@ -17,9 +17,10 @@ VALID_ACTIONS = [0, 1, 2, 3, 4]
 LEN_SKILL = 24
 
 
-# env = gym.envs.make("Breakout-v0")
 env = RMSenv(len_skill=LEN_SKILL, action_space=len(VALID_ACTIONS))
-
+# env = AtariSkillenv(ENV="Alien-ramDeterministic-v4", len_skill=4, action_space=5, 
+#                  model=PPO2, policy=MlpPolicy, save_path = "./path/to/store/location",
+#                  verbose=1, num_cpu=15):
 
 class Estimator():
     """Q-Value Estimator neural network.
