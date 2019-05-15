@@ -8,19 +8,52 @@ import sys
 import tensorflow as tf
 from skill_env import RMSenv, AtariSkillenv
 
+import gym
+from skill_lib.env_wrapper import SkillWrapper, ActionRemapWrapper
+from skill_lib.manager import AtariPolicyManager
+from stable_baselines.common.policies import MlpPolicy
+from stable_baselines.common.vec_env import DummyVecEnv
+from stable_baselines import PPO2
+
 from lib import plotting
 from collections import deque, namedtuple
 
 
 # Atari Actions: 0, 1, 2, 3, 4
 VALID_ACTIONS = [0, 1, 2, 3, 4]
-LEN_SKILL = 24
+LEN_SKILL = 6
 
 
 env = RMSenv(len_skill=LEN_SKILL, action_space=len(VALID_ACTIONS))
-# env = AtariSkillenv(ENV="Alien-ramDeterministic-v4", len_skill=4, action_space=5, 
-#                  model=PPO2, policy=MlpPolicy, save_path = "./path/to/store/location",
-#                  verbose=1, num_cpu=15):
+# env = AtariSkillenv(ENV="Alien-ramDeterministic-v4", len_skill=LEN_SKILL, action_space=len(VALID_ACTIONS), 
+#                  model=PPO2, policy=MlpPolicy, save_path="./path/to/store/location",
+#                  verbose=1, num_cpu=15)
+
+class StateProcessor():
+    """
+    Processes a raw Atari images. Resizes it and converts it to grayscale.
+    """
+    def __init__(self):
+        # Build the Tensorflow graph
+        with tf.variable_scope("state_processor"):
+            self.input_state = tf.placeholder(shape=[210, 160, 3], dtype=tf.uint8)
+            self.output = tf.image.rgb_to_grayscale(self.input_state)
+            self.output = tf.image.crop_to_bounding_box(self.output, 34, 0, 160, 160)
+            self.output = tf.image.resize_images(
+                self.output, [84, 84], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+            self.output = tf.squeeze(self.output)
+
+    def process(self, sess, state):
+        """
+        Args:
+            sess: A Tensorflow session object
+            state: A [210, 160, 3] Atari RGB State
+        Returns:
+            A processed [84, 84] state representing grayscale values.
+        """
+        return sess.run(self.output, { self.input_state: state })
+
+
 
 class Estimator():
     """Q-Value Estimator neural network.
@@ -48,7 +81,8 @@ class Estimator():
 
         # Placeholders for our input
         # Our input are 4 RGB frames of shape 160, 160 each
-        self.X_pl = tf.placeholder(shape=[None, LEN_SKILL, len(VALID_ACTIONS), 4], dtype=tf.int32, name="X")
+        # self.X_pl = tf.placeholder(shape=[None, LEN_SKILL, len(VALID_ACTIONS), 4], dtype=tf.int32, name="X")
+        self.X_pl = tf.placeholder(shape=[None, LEN_SKILL, len(VALID_ACTIONS)], dtype=tf.int32, name="X")
         # The TD target value
         self.y_pl = tf.placeholder(shape=[None], dtype=tf.float32, name="y")
         # Integer id of which action was selected
@@ -145,6 +179,7 @@ def make_epsilon_greedy_policy(estimator, nA):
     """
     def policy_fn(sess, observation, epsilon):
         A = np.ones(nA, dtype=float) * epsilon / nA
+
         q_values = estimator.predict(sess, np.expand_dims(observation, 0))[0]
         best_action = np.argmax(q_values)
         A[best_action] += (1.0 - epsilon)
@@ -197,12 +232,13 @@ def deep_q_learning(sess,
         An EpisodeStats object with two numpy arrays for episode_lengths and episode_rewards.
     """
 
+    # Element format of replay memory
     Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
 
     # The replay memory
     replay_memory = []
 
-    # Keeps track of useful statistics
+    # Keeps track of useful statistics. type: namedtuple
     stats = plotting.EpisodeStats(
         episode_lengths=np.zeros(num_episodes),
         episode_rewards=np.zeros(num_episodes))
@@ -226,6 +262,7 @@ def deep_q_learning(sess,
 
     total_t = sess.run(tf.contrib.framework.get_global_step())
 
+
     # The epsilon decay schedule
     epsilons = np.linspace(epsilon_start, epsilon_end, epsilon_decay_steps)
 
@@ -237,24 +274,23 @@ def deep_q_learning(sess,
     # Populate the replay memory with initial experience
     print("Populating replay memory...")
     state = env.reset()
-    print('----------state-----------')
-    print('type:{}, \t shape{}'.format(type(state), state.shape))
 
     # state = state_processor.process(sess, state)
 
-    state = np.stack([state] * 4, axis=2)
+    # state = np.stack([state] * 4, axis=2)
     for i in range(replay_memory_init_size):
+        print('{}th replay buffer init...'.format(i))
         action_probs = policy(sess, state, epsilons[min(total_t, epsilon_decay_steps-1)])
         action = np.random.choice(np.arange(len(action_probs)), p=action_probs)
 
         next_state, reward, done, _ = env.step(VALID_ACTIONS[action])
         # next_state = state_processor.process(sess, next_state)
-        next_state = np.append(state[:,:,1:], np.expand_dims(next_state, 2), axis=2)
+        # next_state = np.append(state[:,:,1:], np.expand_dims(next_state, 2), axis=2)
         replay_memory.append(Transition(state, action, reward, next_state, done))
         if done:
             state = env.reset()
             # state = state_processor.process(sess, state)
-            state = np.stack([state] * 4, axis=2)
+            # state = np.stack([state] * 4, axis=2)
         else:
             state = next_state
 
@@ -273,7 +309,7 @@ def deep_q_learning(sess,
         # Reset the environment
         state = env.reset()
         # state = state_processor.process(sess, state)
-        state = np.stack([state] * 4, axis=2)
+        # state = np.stack([state] * 4, axis=2)
         loss = None
 
         # One step in the environment
@@ -302,11 +338,11 @@ def deep_q_learning(sess,
             action = np.random.choice(np.arange(len(action_probs)), p=action_probs)
             next_state, reward, done, _ = env.step(VALID_ACTIONS[action])
             # next_state = state_processor.process(sess, next_state)
-            next_state = np.append(state[:,:,1:], np.expand_dims(next_state, 2), axis=2)
+            # next_state = np.append(state[:,:,1:], np.expand_dims(next_state, 2), axis=2)
 
             # If our replay memory is full, pop the first element
             if len(replay_memory) == replay_memory_size:
-                # replay_memory.pop(0)
+                replay_memory.pop(0)
                 '''
                 pop the memory with lowest reward
                 '''
@@ -334,7 +370,7 @@ def deep_q_learning(sess,
 
                     return new_memory
 
-                replay_memory = pop_memory(replay_memory)
+                # replay_memory = pop_memory(replay_memory)
 
 
 
@@ -404,13 +440,13 @@ with tf.Session() as sess:
                                     target_estimator=target_estimator,
                                     state_processor=state_processor,
                                     experiment_dir=experiment_dir,
-                                    num_episodes=500,
-                                    replay_memory_size=150*4,
-                                    replay_memory_init_size=150*4,
+                                    num_episodes=1000,
+                                    replay_memory_size=5000,
+                                    replay_memory_init_size=600,
                                     update_target_estimator_every=4*LEN_SKILL,
                                     epsilon_start=1.0,
                                     epsilon_end=0.1,
-                                    epsilon_decay_steps=250,
+                                    epsilon_decay_steps=400 * (LEN_SKILL-1),
                                     discount_factor=0.99,
                                     batch_size=128):
 
